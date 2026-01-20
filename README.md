@@ -1,128 +1,85 @@
-#include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <UniversalTelegramBot.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BME680.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
-#include <Wire.h>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Greenguard Live</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; color: #333; margin: 0; padding: 20px; text-align: center; }
+        .card { background: white; border-radius: 15px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .temp-val { font-size: 3rem; font-weight: bold; color: #2ecc71; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .stat { background: #e8f5e9; padding: 10px; border-radius: 10px; }
+        .weather-info { color: #555; font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🌱 Greenguard Live</h1>
+        <p class="weather-info" id="location-time">Preston, UK</p>
+    </div>
 
-// --- 1. YOUR CREDENTIALS ---
-const char* ssid = "RedmiA3x";
-const char* password = "Kvng22hh"; 
-const char* botToken = "7694550682:AAHKr_Y239toYKuP9hq6uQ5IdN_wI8enegQ";
-const char* chatId = "8588235670";
-const char* owmApiKey = "528c0f0810576f7f5fc7ccb5deef5b65";
+    <div class="grid">
+        <div class="card">
+            <p>Farm Temp</p>
+            <div class="temp-val" id="farm-temp">--°C</div>
+        </div>
+        <div class="card">
+            <p>Battery</p>
+            <div class="temp-val" id="battery-val">--%</div>
+        </div>
+    </div>
 
-// --- 2. MINI APP SETTINGS ---
-const char* miniAppURL = "https://kvnghh22.github.io/Greenguard/"; 
+    <div class="card">
+        <h3>Preston Weather Forecast</h3>
+        <p id="weather-desc">Fetching forecast...</p>
+        <div class="grid">
+            <div class="stat">Outside: <span id="outside-temp">--°C</span></div>
+            <div class="stat">Rain Prob: <span id="rain-prob">--%</span></div>
+        </div>
+    </div>
 
-// --- 3. HARDWARE & THRESHOLDS ---
-#define BATTERY_PIN 34    
-const float TEMP_HIGH = 28.0; 
-const float TEMP_LOW = 3.0;   
+    <div class="card">
+        <canvas id="tempChart"></canvas>
+    </div>
 
-Adafruit_BME680 bme;
-WiFiClientSecure client;
-UniversalTelegramBot bot(botToken, client);
+    <script>
+        const tele = window.Telegram.WebApp;
+        tele.ready();
+        tele.expand(); // Make the app full screen
 
-// --- 4. TIMERS ---
-unsigned long lastSensorRead = 0;
-const long sensorInterval = 30000; 
-unsigned long lastForecastCheck = 0;
-const long forecastInterval = 3600000; 
+        // YOUR API KEY
+        const apiKey = "528c0f0810576f7f5fc7ccb5deef5b65";
+        const city = "Preston,GB";
 
-// --- 5. SETUP (THE BRAIN STARTUP) ---
-void setup() {
-  Serial.begin(115200);
-  delay(1000); 
-  Serial.println("\n--- GREENGUARD DEBUG BOOT ---");
-  
-  Wire.begin(41, 40); 
-  if (!bme.begin(0x77)) {
-    Serial.println("FATAL: BME680 Sensor Not Found!");
-    while (1);
-  }
-  Serial.println("Sensor Online.");
+        async function fetchWeather() {
+            try {
+                const response = await fetch(`https://api.openweathermap.org/data/2.5/weather?q=${city}&units=metric&appid=${apiKey}`);
+                const data = await response.json();
+                document.getElementById('outside-temp').innerText = Math.round(data.main.temp) + "°C";
+                document.getElementById('weather-desc').innerText = data.weather[0].description;
+                
+                const forecastRes = await fetch(`https://api.openweathermap.org/data/2.5/forecast?q=${city}&units=metric&appid=${apiKey}`);
+                const forecastData = await forecastRes.json();
+                document.getElementById('rain-prob').innerText = Math.round(forecastData.list[0].pop * 100) + "%";
+            } catch (e) {
+                console.error("Weather Error", e);
+            }
+        }
 
-  bme.setTemperatureOversampling(BME680_OS_8X);
-  bme.setHumidityOversampling(BME680_OS_2X);
-  bme.setPressureOversampling(BME680_OS_4X);
-  bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
-  bme.setGasHeater(320, 150); 
+        // Initialize Chart
+        const ctx = document.getElementById('tempChart').getContext('2d');
+        const tempChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: ['Start', 'Now'],
+                datasets: [{ label: 'Farm Temp', data: [20, 20], borderColor: '#2ecc71', tension: 0.1 }]
+            }
+        });
 
-  WiFi.begin(ssid, password);
-  client.setInsecure(); 
-  
-  Serial.print("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED) { 
-    delay(500); 
-    Serial.print("."); 
-  }
-  Serial.println("\nWiFi CONNECTED!");
-
-  // Test Telegram
-  String welcome = "✅ Greenguard System Online!\nClick below for your dashboard.";
-  String keyboardJson = "[[\"{\\\"text\\\": \\\"Open Dashboard\\\", \\\"web_app\\\": {\\\"url\\\": \\\"" + String(miniAppURL) + "\\\"}}\"]]";
-  
-  if (bot.sendMessageWithReplyKeyboard(chatId, welcome, "", keyboardJson, true)) {
-    Serial.println("Telegram Message Sent Successfully!");
-  } else {
-    Serial.println("Telegram Message FAILED.");
-  }
-}
-
-// --- 6. LOOP (THE MAIN WATCHMAN) ---
-void loop() {
-  int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-  while (numNewMessages) {
-    handleNewMessages(numNewMessages);
-    numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-  }
-
-  if (millis() - lastSensorRead > sensorInterval) {
-    monitorEnvironment();
-    lastSensorRead = millis();
-  }
-
-  if (millis() - lastForecastCheck > forecastInterval) {
-    getWeatherForecast();
-    lastForecastCheck = millis();
-  }
-  delay(1000);
-}
-
-// --- 7. HELPER FUNCTIONS (THE WORKERS) ---
-
-void monitorEnvironment() {
-  if (!bme.performReading()) return;
-  float temp = bme.temperature;
-  Serial.print("Current Temp: "); Serial.println(temp);
-  
-  if (temp > TEMP_HIGH) bot.sendMessage(chatId, "🔥 ALERT: Too Hot! " + String(temp) + "°C", "");
-  if (temp < TEMP_LOW) bot.sendMessage(chatId, "❄️ ALERT: Frost! " + String(temp) + "°C", "");
-}
-
-void handleNewMessages(int numNewMessages) {
-  for (int i=0; i<numNewMessages; i++) {
-    String text = bot.messages[i].text;
-    if (text == "/status") {
-      bme.performReading();
-      String msg = "📊 *Greenguard Status*\nTemp: " + String(bme.temperature) + "°C\nHum: " + String(bme.humidity) + "%\nLocation: Preston";
-      bot.sendMessage(chatId, msg, "Markdown");
-    }
-  }
-}
-
-void getWeatherForecast() {
-  HTTPClient http;
-  String url = "http://api.openweathermap.org/data/2.5/forecast?q=Preston,GB&units=metric&appid=" + String(owmApiKey);
-  http.begin(url);
-  if (http.GET() > 0) {
-    JsonDocument doc;
-    deserializeJson(doc, http.getStream());
-    float rainProb = doc["list"][0]["pop"];
-    if (rainProb > 0.7) bot.sendMessage(chatId, "🌧️ Rain forecast for Preston!", "");
-  }
-  http.end();
-}
+        fetchWeather();
+    </script>
+</body>
+</html>
